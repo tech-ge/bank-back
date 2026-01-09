@@ -10,7 +10,18 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+// CORS configuration for production and development
+const corsOptions = {
+    origin: [
+        'https://bank-front-chi.vercel.app',
+        'http://localhost:3000',
+        'http://localhost:8000'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Pusher configuration

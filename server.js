@@ -1,289 +1,252 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
 require('dotenv').config();
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const Pusher = require('pusher');
 
 const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
-// CORS configuration for production and development
 const corsOptions = {
     origin: [
         'https://bank-front-chi.vercel.app',
         'http://localhost:3000',
-        'http://localhost:8000'
+        'http://localhost:5173',
+        'http://localhost:8080'
     ],
     credentials: true,
-    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 };
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Pusher configuration
-const pusher = new Pusher({
-    appId: process.env.PUSHER_APP_ID,
-    key: process.env.PUSHER_KEY,
-    secret: process.env.PUSHER_SECRET,
-    cluster: process.env.PUSHER_CLUSTER,
-    useTLS: true
-});
-
-// Test endpoint
-app.get('/api/test', (req, res) => {
-    res.json({ 
-        message: 'Backend is running successfully!',
-        timestamp: new Date().toISOString(),
-        env: process.env.NODE_ENV,
-        port: port,
-        paymentGateways: ['Stripe', 'Flutterwave', 'Pusher']
-    });
-});
+// In-memory store for demo (no database)
+const demoBalance = 100000; // KES 100,000 demo balance
 
 // Health check
 app.get('/api/health', (req, res) => {
-    res.json({ 
+    res.json({
         status: 'healthy',
-        service: 'Money Withdrawal System',
-        version: '1.0.0',
-        port: port
+        service: 'Stripe Money System',
+        mode: process.env.NODE_ENV || 'development',
+        stripe: 'active'
     });
 });
 
-// Get all transactions
-app.get('/api/transactions', (req, res) => {
+// Get available balance
+app.get('/api/balance', (req, res) => {
     res.json({
         success: true,
-        count: 0,
-        transactions: [],
-        message: 'Transactions are not persisted in this system'
+        balance: demoBalance,
+        currency: 'KES',
+        message: 'Demo balance for testing'
     });
 });
 
-// Withdrawal endpoint with payment gateway integration
+// Process WITHDRAWAL (Bank or M-Pesa)
 app.post('/api/withdraw', async (req, res) => {
     try {
-        const { amount, accountNumber, bankCode, accountName, withdrawalMethod, phoneNumber, paymentMethod } = req.body;
+        const { amount, method, accountDetails, phoneNumber, accountName } = req.body;
+        
+        console.log('Withdrawal request:', { amount, method, accountDetails, phoneNumber });
         
         // Validation
         if (!amount || amount < 100) {
-            return res.status(400).json({
+            return res.json({
                 success: false,
                 message: 'Amount must be at least KES 100'
             });
         }
         
-        if (amount > 1000000) {
-            return res.status(400).json({
+        if (amount > demoBalance) {
+            return res.json({
                 success: false,
-                message: 'Amount cannot exceed KES 1,000,000'
+                message: `Insufficient balance. Available: KES ${demoBalance}`
             });
         }
+        
+        if (amount > 1000000) {
+            return res.json({
+                success: false,
+                message: 'Maximum withdrawal is KES 1,000,000'
+            });
+        }
+        
+        if (!method || !['bank', 'mpesa'].includes(method)) {
+            return res.json({
+                success: false,
+                message: 'Please select withdrawal method (bank or mpesa)'
+            });
+        }
+        
+        // Validate method-specific details
+        if (method === 'bank') {
+            if (!accountDetails || !accountName) {
+                return res.json({
+                    success: false,
+                    message: 'Bank account details required'
+                });
+            }
+        } else if (method === 'mpesa') {
+            if (!phoneNumber || !/^[0-9]{10}$/.test(phoneNumber)) {
+                return res.json({
+                    success: false,
+                    message: 'Valid 10-digit M-Pesa number required'
+                });
+            }
+        }
+        
+        // Simulate processing delay
+        await new Promise(resolve => setTimeout(resolve, 1500));
         
         // Generate transaction ID
-        const transactionId = 'TXN_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9).toUpperCase();
-        const reference = 'REF_' + Date.now();
-        const fees = withdrawalMethod === 'bank' ? 50 : 25;
-        const netAmount = parseFloat(amount) - fees;
+        const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
-        let paymentResult = null;
+        // Calculate fees
+        const fees = method === 'bank' ? 50 : 25;
+        const netAmount = amount - fees;
         
-        try {
-            // Route to appropriate payment gateway based on method
-            if (paymentMethod === 'stripe') {
-                paymentResult = await processStripePayment(amount, accountName, transactionId);
-            } else if (paymentMethod === 'flutterwave') {
-                paymentResult = await processFlutterwavePayment(amount, phoneNumber, accountName, transactionId);
-            } else {
-                // Default to Flutterwave if no method specified
-                paymentResult = await processFlutterwavePayment(amount, phoneNumber, accountName, transactionId);
-            }
-        } catch (paymentError) {
-            console.error('Payment processing error:', paymentError.message);
-            return res.status(400).json({
-                success: false,
-                message: 'Payment processing failed: ' + paymentError.message
-            });
-        }
+        // Create Stripe Transfer for REAL implementation
+        // For demo, we simulate success 90% of the time
+        const isSuccess = Math.random() > 0.1; // 90% success rate
         
-        // Send real-time notification via Pusher
-        try {
-            await pusher.trigger('withdrawal-channel', 'withdrawal-event', {
+        if (isSuccess) {
+            console.log(`✅ Withdrawal SUCCESS: KES ${amount} via ${method}`);
+            
+            res.json({
+                success: true,
+                message: `Withdrawal of KES ${amount} processed successfully!`,
                 transactionId: transactionId,
                 amount: amount,
-                method: withdrawalMethod,
+                fees: fees,
+                netAmount: netAmount,
+                method: method,
                 status: 'completed',
                 timestamp: new Date().toISOString(),
-                accountName: accountName,
-                reference: reference
+                reference: `REF${Date.now()}`
             });
-        } catch (pusherError) {
-            console.error('Pusher notification error:', pusherError.message);
+        } else {
+            console.log(`❌ Withdrawal FAILED: KES ${amount} via ${method}`);
+            
+            res.json({
+                success: false,
+                message: 'Payment processing failed. Please try again.',
+                transactionId: transactionId,
+                status: 'failed'
+            });
         }
-        
-        // Success response
-        res.json({
-            success: true,
-            message: 'Withdrawal of KES ' + amount + ' processed successfully',
-            transactionId: transactionId,
-            reference: reference,
-            paymentGateway: paymentMethod || 'flutterwave',
-            fees: fees,
-            netAmount: netAmount,
-            estimatedCompletion: 'Instant to 24 hours',
-            paymentDetails: paymentResult
-        });
         
     } catch (error) {
         console.error('Withdrawal error:', error);
-        res.status(500).json({
+        res.json({
             success: false,
-            message: 'Internal server error: ' + error.message
+            message: 'System error: ' + error.message
         });
     }
 });
 
-// Stripe payment processing
-async function processStripePayment(amount, description, transactionId) {
+// Process DEPOSIT (Card payment via Stripe Checkout)
+app.post('/api/deposit', async (req, res) => {
     try {
-        // Create a payment intent with Stripe
-        const paymentIntent = await stripe.paymentIntents.create({
-            amount: Math.round(amount * 100), // Convert to cents
-            currency: 'kes',
-            description: `Withdrawal ${transactionId} for ${description}`,
+        const { amount, returnUrl } = req.body;
+        
+        if (!amount || amount < 100) {
+            return res.json({
+                success: false,
+                message: 'Minimum deposit is KES 100'
+            });
+        }
+        
+        if (amount > 500000) {
+            return res.json({
+                success: false,
+                message: 'Maximum deposit is KES 500,000'
+            });
+        }
+        
+        // Create Stripe Checkout Session
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [{
+                price_data: {
+                    currency: 'kes',
+                    product_data: {
+                        name: 'Money Deposit',
+                        description: `Deposit KES ${amount} to your account`
+                    },
+                    unit_amount: Math.round(amount * 100), // Convert to cents
+                },
+                quantity: 1,
+            }],
+            mode: 'payment',
+            success_url: returnUrl || 'https://bank-front-chi.vercel.app/?success=true&type=deposit',
+            cancel_url: returnUrl || 'https://bank-front-chi.vercel.app/?canceled=true',
             metadata: {
-                transactionId: transactionId,
-                withdrawalMethod: 'bank'
+                type: 'deposit',
+                amount: amount.toString()
             }
         });
         
-        console.log('✅ Stripe payment intent created:', paymentIntent.id);
+        res.json({
+            success: true,
+            message: 'Deposit session created',
+            sessionId: session.id,
+            url: session.url,
+            amount: amount
+        });
         
-        return {
-            gateway: 'stripe',
-            paymentId: paymentIntent.id,
-            status: 'processing',
-            clientSecret: paymentIntent.client_secret
-        };
     } catch (error) {
-        throw new Error('Stripe error: ' + error.message);
+        console.error('Deposit error:', error);
+        res.json({
+            success: false,
+            message: 'Failed to create deposit: ' + error.message
+        });
     }
-}
-
-// Flutterwave payment processing
-async function processFlutterwavePayment(amount, phoneNumber, accountName, transactionId) {
-    try {
-        const flutterwaveResponse = await axios.post(
-            'https://api.flutterwave.com/v3/transfers',
-            {
-                account_bank: '999999', // Demo bank code
-                account_number: phoneNumber || '1234567890',
-                amount: parseFloat(amount),
-                narration: `Withdrawal ${transactionId}`,
-                beneficiary_name: accountName || 'Beneficiary',
-                currency: 'KES',
-                reference: transactionId
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-        
-        console.log('✅ Flutterwave transfer initiated:', flutterwaveResponse.data);
-        
-        return {
-            gateway: 'flutterwave',
-            transferId: flutterwaveResponse.data.data?.id,
-            status: flutterwaveResponse.data.status,
-            reference: transactionId
-        };
-    } catch (error) {
-        console.error('Flutterwave API error:', error.response?.data || error.message);
-        throw new Error('Flutterwave processing failed');
-    }
-}
-
-// Get transaction by ID
-app.get('/api/transaction/:id', (req, res) => {
-    res.json({
-        success: false,
-        message: 'Transaction history is not stored in this system'
-    });
 });
 
-// Get banks list
-app.get('/api/banks', (req, res) => {
-    const banks = [
-        { code: '01', name: 'KCB Bank Kenya' },
-        { code: '02', name: 'Equity Bank' },
-        { code: '03', name: 'Co-operative Bank' },
-        { code: '04', name: 'Absa Bank Kenya' },
-        { code: '05', name: 'Stanbic Bank' },
-        { code: '06', name: 'NCBA Bank' },
-        { code: '07', name: 'Standard Chartered' },
-        { code: '08', name: 'DTB Kenya' },
-        { code: '09', name: 'I&M Bank' },
-        { code: '10', name: 'Family Bank' }
-    ];
+// Stripe webhook for real payments (optional)
+app.post('/api/webhook', express.raw({type: 'application/json'}), (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
     
-    res.json({
-        success: true,
-        banks
-    });
-});
-
-// Clear all transactions (for testing)
-app.delete('/api/transactions/clear', (req, res) => {
-    res.json({
-        success: true,
-        message: 'Transactions are not stored in this system'
-    });
+    let event;
+    
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err) {
+        console.error('Webhook error:', err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    
+    // Handle the event
+    switch (event.type) {
+        case 'checkout.session.completed':
+            const session = event.data.object;
+            console.log('💰 Payment completed:', session.id);
+            break;
+        case 'payment_intent.succeeded':
+            const paymentIntent = event.data.object;
+            console.log('💳 Payment succeeded:', paymentIntent.id);
+            break;
+        default:
+            console.log(`Unhandled event type: ${event.type}`);
+    }
+    
+    res.json({received: true});
 });
 
 // Start server
 app.listen(port, () => {
-    const isDevelopment = process.env.NODE_ENV === 'development';
-    
-    console.log('========================================');
-    console.log('💰 Money Withdrawal System Backend');
-    console.log('========================================');
-    console.log(`🚀 Server running on: http://localhost:${port}`);
-    console.log(`📋 Environment: ${isDevelopment ? '🟢 DEVELOPMENT (Test Mode)' : '🔴 PRODUCTION'}`);
-    console.log('');
-    console.log('💳 Payment Gateways Active:');
-    console.log('   ✅ Stripe - Bank transfers');
-    if (isDevelopment) {
-        console.log('      └─ Using TEST keys (sandbox mode)');
-        console.log('      └─ No real charges will occur');
-    }
-    console.log('   ✅ Flutterwave - Mobile & International');
-    if (isDevelopment) {
-        console.log('      └─ Using SANDBOX keys (no real transfers)');
-    }
-    console.log('   ✅ Pusher - Real-time notifications');
-    console.log('');
-    console.log('📊 API Endpoints:');
-    console.log('   GET  /api/test          - Test endpoint');
-    console.log('   GET  /api/health        - Health check');
-    console.log('   POST /api/withdraw      - Make withdrawal');
-    console.log('   GET  /api/banks         - List banks');
-    console.log('========================================');
-    if (isDevelopment) {
-        console.log('⚠️  DEVELOPMENT MODE - For testing only');
-        console.log('📝 To switch to PRODUCTION:');
-        console.log('   1. Update STRIPE_SECRET_KEY in .env');
-        console.log('   2. Update STRIPE_PUBLIC_KEY in .env');
-        console.log('   3. Update FLUTTERWAVE_SECRET_KEY in .env');
-        console.log('   4. Change NODE_ENV=production in .env');
-        console.log('========================================');
-    }
-    console.log('✅ All payment gateways initialized');
-    console.log('========================================');
+    console.log('='.repeat(50));
+    console.log('💰 STRIPE MONEY SYSTEM BACKEND');
+    console.log('='.repeat(50));
+    console.log(`🚀 Server: http://localhost:${port}`);
+    console.log(`🔗 Frontend: https://bank-front-chi.vercel.app`);
+    console.log(`💳 Mode: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`📊 Demo Balance: KES ${demoBalance.toLocaleString()}`);
+    console.log('✅ Bank & M-Pesa withdrawals ready');
+    console.log('✅ Stripe Checkout deposits ready');
+    console.log('='.repeat(50));
 });
